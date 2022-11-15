@@ -104,16 +104,21 @@ def get_entity_by_name(fos_name):
     return fos_df[fos_df.prep_name == fos_name.lower()].entity.values[0]
 
 
-def get_parents(entity):
-    return children_fos_df[children_fos_df.children_fos == entity].parent_fos.values
-
-
-def get_children(entity):
-    return children_fos_df[children_fos_df.parent_fos == entity].children_fos.values
-
-
-def get_brothers(entity):
-    return [child for parent in get_parents(entity) for child in get_children(parent)]
+def get_edge_type(fos1, fos2):
+    edge = children_fos_df[
+        (
+            (children_fos_df.children_fos_name == fos1)
+            &
+            (children_fos_df.parent_fos_name == fos2)
+        )
+        |
+        (
+            (children_fos_df.children_fos_name == fos2)
+            &
+            (children_fos_df.parent_fos_name == fos1)
+        )
+        ].iloc[0]
+    return 'parent' if simple_path[i] == edge.parent_fos_name else 'children'
 
 
 st.markdown("<h2 style='text-align: center; color: white;'>Enter your query</h2>", unsafe_allow_html=True)
@@ -132,74 +137,109 @@ for fos in foses:
     if fos not in st.session_state.all_foses:
         st.session_state.all_foses.append(fos)
         
-max_n = st.selectbox('Choose max N of children and parents of node', list(range(1, 100)))
+max_n = st.selectbox('Choose max length of a path', ['shortest path'] + list(range(1, 11)))
+select_all = st.checkbox('Select all paths: ', 'Yes')
 
-st.markdown("<h2 style='text-align: center; color: white;'>Choose nodes to go deeper</h2>", unsafe_allow_html=True)
-last_selected_foses = st.session_state.selected_foses
-selected_foses = st.multiselect('', st.session_state.all_foses,
-                                default=st.session_state.selected_foses)
+input_cols = st.columns(2)
+with input_cols[0]:
+    st.markdown("<h2 style='text-align: center; color: white;'>From</h2>", unsafe_allow_html=True)
+    selected_fos1 = st.selectbox('', [''] + st.session_state.all_foses, key=0).lower()
+
+with input_cols[1]:
+    st.markdown("<h2 style='text-align: center; color: white;'>To</h2>", unsafe_allow_html=True)
+    selected_fos2= st.selectbox('', [''] + st.session_state.all_foses, key=1).lower()
+
+# st.markdown("<h2 style='text-align: center; color: white;'>Choose nodes to go deeper</h2>", unsafe_allow_html=True)
+# last_selected_foses = st.session_state.selected_foses
+# selected_foses = st.multiselect('', st.session_state.all_foses,
+#                                 default=st.session_state.selected_foses)
 # st.session_state.rerun_idx += 1
 # if st.session_state.rerun_idx % 2 == 0:
 #     st.experimental_rerun()
 
-for fos in selected_foses:
-    if fos not in st.session_state.selected_foses:
-        st.session_state.selected_foses.append(fos)
+# for fos in selected_foses:
+#     if fos not in st.session_state.selected_foses:
+#         st.session_state.selected_foses.append(fos)
 
-with open('selected_foses.json', 'w') as f:
-    json.dump(st.session_state.selected_foses, f)
+# with open('selected_foses.json', 'w') as f:
+#     json.dump(st.session_state.selected_foses, f)
 
-results = {}
-for request in selected_foses:
-    result_entities = get_children(get_entity_by_name(request))
-    result_df = fos_df.loc[fos_df[fos_df.entity.isin(result_entities)].index].sort_values('rank').iloc[:max_n]
-    results[request] = result_df
-foses = [name for df in results.values() for name in df.name]
+if selected_fos1 and selected_fos2:
+    G = nx.Graph(list(children_fos_df[['children_fos_name', 'parent_fos_name']].to_records(index=False)))
+    if max_n == 'shortest path':
+        simple_paths = nx.all_shortest_paths(G, source=selected_fos1, target=selected_fos2)
+    else:
+        simple_paths = nx.all_simple_paths(G, source=selected_fos2, target=selected_fos2, cutoff=max_n)
 
-for fos in foses:
-    if fos not in st.session_state.all_foses:
-        st.session_state.all_foses.append(fos)
+    labels_paths = {f'Length: {len(path)}. ' + ' -- '.join(path): path for path in simple_paths}
+    
+    if select_all:
+        selected_paths = list(labels_paths.keys())
+    else:
+        selected_paths = st.multiselect('', [''] + list(labels_paths.keys()), key=2)
 
-G = nx.DiGraph()
-for request in selected_foses:
-    for name in results[request].name:
-        G.add_edge(request, name)
+
+# results = {}
+# for path in simple_paths:
+#     result_entities = get_children(get_entity_by_name(request))
+#     result_df = fos_df.loc[fos_df[fos_df.entity.isin(result_entities)].index].sort_values('rank').iloc[:max_n]
+#     results[request] = result_df
+# foses = [name for df in results.values() for name in df.name]
+
+# for fos in foses:
+#     if fos not in st.session_state.all_foses:
+#         st.session_state.all_foses.append(fos)
+    if selected_paths:
+        G = nx.DiGraph()
+        for path_label in selected_paths:
+            simple_path = labels_paths[path_label]
+            for i in range(len(simple_path)-1):
+                fos1, fos2 = simple_path[i], simple_path[i+1]
+                if get_edge_type(fos1, fos2) == 'parent':
+                    G.add_edge(fos1, fos2)
+                else:
+                    G.add_edge(fos2, fos1)
 #     if len(results[request]) == 0:
 #         G.add_edge(request, request)
 
-results = {}
-for request in selected_foses:
-    result_entities = get_parents(get_entity_by_name(request))
-    result_df = fos_df.loc[fos_df[fos_df.entity.isin(result_entities)].index].sort_values('rank').iloc[:max_n]
-    results[request] = result_df
-foses = [name for df in results.values() for name in df.name]
+# results = {}
+# for request in selected_foses:
+#     result_entities = get_parents(get_entity_by_name(request))
+#     result_df = fos_df.loc[fos_df[fos_df.entity.isin(result_entities)].index].sort_values('rank').iloc[:max_n]
+#     results[request] = result_df
+# foses = [name for df in results.values() for name in df.name]
 
-for fos in foses:
-    if fos not in st.session_state.all_foses:
-        st.session_state.all_foses.append(fos)
+# for fos in foses:
+#     if fos not in st.session_state.all_foses:
+#         st.session_state.all_foses.append(fos)
 
-for request in selected_foses:
-    for name in results[request].name:
-        G.add_edge(name, request)
+# for request in selected_foses:
+#     for name in results[request].name:
+#         G.add_edge(name, request)
 
-nt = Network(
-    directed=True,
-    height='1020px',
-    width='100%',
-    bgcolor='#222222',
-    font_color='white'
-)
-nt.from_nx(G)
-nt.repulsion(node_distance=420, central_gravity=0.1,
-             spring_length=110, spring_strength=0.10,
-             damping=0.95)
+        nt = Network(
+            directed=True,
+            height='1020px',
+            width='100%',
+            bgcolor='#222222',
+            font_color='white'
+        )
+        nt.from_nx(G)
+        for node in nt.nodes:
+            if node['label'] in [selected_fos1, selected_fos2]:
+    #             node['size'] = 20
+                node['color'] = 'red'
+    
+        nt.repulsion(node_distance=420, central_gravity=0.3,
+                     spring_length=110, spring_strength=0.2,
+                     damping=0.95)
+        
+        nt.save_graph(f'html_files/pyvis_graph.html')
+        HtmlFile = open(f'html_files/pyvis_graph.html', 'r', encoding='utf-8')
+        components.html(HtmlFile.read(), height=1050)
 
-nt.save_graph(f'html_files/pyvis_graph.html')
-HtmlFile = open(f'html_files/pyvis_graph.html', 'r', encoding='utf-8')
-components.html(HtmlFile.read(), height=1050)
-
-cols = st.columns(11)
-with cols[int(len(cols) / 2)]:
-    st.button('Go dipper!')
+# cols = st.columns(11)
+# with cols[int(len(cols) / 2)]:
+#     st.button('Go dipper!')
 
 ##############################################################################################################################
