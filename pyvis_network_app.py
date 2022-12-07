@@ -1,6 +1,7 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
+import math
 import json
 import networkx as nx
 from pyvis.network import Network
@@ -82,6 +83,7 @@ st.set_page_config(layout="wide")
 ##############################################################################################################################
 fos_df = pd.read_csv('data/fos_df.csv')
 fos_df.dropna(inplace=True)
+fos_df.name = fos_df.name.apply(str.lower)
 children_fos_df1 = pd.read_csv('data/children_fos_df_part1.csv')
 children_fos_df2 = pd.read_csv('data/children_fos_df_part2.csv')
 children_fos_df = pd.concat([children_fos_df1, children_fos_df2], ignore_index=True)
@@ -121,6 +123,18 @@ def get_edge_type(fos1, fos2):
     return 'parent' if simple_path[i] == edge.parent_fos_name else 'children'
 
 
+def get_connection_power(name1, name2):
+    entity1 = get_entity_by_name(name1)
+    entity2 = get_entity_by_name(name2)
+    df1 = children_fos_df[(children_fos_df.parent_fos == entity1) & (children_fos_df.children_fos == entity2)]
+    if len(df1):
+        return df1.iloc[0].connection_power
+    else:
+        df2 = children_fos_df[(children_fos_df.parent_fos == entity2) & (children_fos_df.children_fos == entity1)]
+        if len(df2):
+            return df2.iloc[0].connection_power
+
+
 st.markdown("<h2 style='text-align: center; color: white;'>Enter your query</h2>", unsafe_allow_html=True)
 
 text_request = set(st.text_input('').lower().split())
@@ -139,6 +153,9 @@ for fos in foses:
         
 max_n = st.selectbox('Choose max length of a path', ['shortest path'] + list(range(1, 11)))
 select_all = st.checkbox('Select all paths: ', 'Yes')
+log_degree = st.selectbox('Choose degree of logarithm', list(range(1, 10)), index=1)
+fos_df['log_power'] = fos_df.power.apply(lambda power: math.log(power, log_degree))
+power_dict = dict(fos_df[['name', 'log_power']].to_records(index=False))
 
 input_cols = st.columns(2)
 with input_cols[0]:
@@ -196,9 +213,9 @@ if selected_fos1 and selected_fos2:
             for i in range(len(simple_path)-1):
                 fos1, fos2 = simple_path[i], simple_path[i+1]
                 if get_edge_type(fos1, fos2) == 'parent':
-                    G.add_edge(fos1, fos2)
+                    G.add_edge(fos1, fos2, label=round(get_connection_power(fos1, fos2), 2))
                 else:
-                    G.add_edge(fos2, fos1)
+                    G.add_edge(fos2, fos1, label=round(get_connection_power(fos2, fos1), 2))
 #     if len(results[request]) == 0:
 #         G.add_edge(request, request)
 
@@ -224,12 +241,13 @@ if selected_fos1 and selected_fos2:
             bgcolor='#222222',
             font_color='white'
         )
+        nx.set_node_attributes(G, power_dict, 'size')
         nt.from_nx(G)
         for node in nt.nodes:
             if node['label'] in [selected_fos1, selected_fos2]:
-    #             node['size'] = 20
                 node['color'] = 'red'
-    
+
+
         nt.repulsion(node_distance=420, central_gravity=0.3,
                      spring_length=110, spring_strength=0.2,
                      damping=0.95)
