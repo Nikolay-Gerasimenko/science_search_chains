@@ -120,7 +120,7 @@ def get_edge_type(fos1, fos2):
             (children_fos_df.parent_fos_name == fos1)
         )
         ].iloc[0]
-    return 'parent' if simple_path[i] == edge.parent_fos_name else 'children'
+    return 'parent' if fos1 == edge.parent_fos_name else 'children'
 
 
 def get_connection_power(name1, name2):
@@ -133,6 +133,28 @@ def get_connection_power(name1, name2):
         df2 = children_fos_df[(children_fos_df.parent_fos == entity2) & (children_fos_df.children_fos == entity1)]
         if len(df2):
             return df2.iloc[0].connection_power
+
+
+def check_simple_path(simple_path):
+    chain = []
+    for i in range(len(simple_path)-1):
+        fos1, fos2 = simple_path[i], simple_path[i+1]
+        chain.append({'fos1': fos1, 'fos2': fos2, 'edge_type': get_edge_type(fos1, fos2)})
+
+    left_end = chain[0]['fos1']
+    for edge in chain:
+        if edge['edge_type'] == 'parent':
+            left_end = edge['fos2']
+        else:
+            break
+    right_end = chain[-1]['fos2']
+    for edge in chain[::-1]:
+        if edge['edge_type'] == 'children':
+            right_end = edge['fos1']
+        else:
+            break
+#     st.markdown(str(chain) + ' | ' + str(left_end == right_end))
+    return left_end == right_end
 
 
 st.markdown("<h2 style='text-align: center; color: white;'>Enter your query</h2>", unsafe_allow_html=True)
@@ -152,7 +174,7 @@ for fos in foses:
         st.session_state.all_foses.append(fos)
         
 max_n = st.selectbox('Choose max length of a path', ['shortest path'] + list(range(1, 11)))
-select_all = st.checkbox('Select all paths: ', 'Yes')
+select_paths_type = st.selectbox('Select paths type:', ['all paths', 'only downstream edges', 'manual'])
 log_degree = st.selectbox('Choose degree of logarithm', list(range(1, 10)), index=1)
 fos_df['log_power'] = fos_df.power.apply(lambda power: math.log(power, log_degree))
 power_dict = dict(fos_df[['name', 'log_power']].to_records(index=False))
@@ -164,22 +186,8 @@ with input_cols[0]:
 
 with input_cols[1]:
     st.markdown("<h2 style='text-align: center; color: white;'>To</h2>", unsafe_allow_html=True)
-    selected_fos2= st.selectbox('', [''] + st.session_state.all_foses, key=1).lower()
+    selected_fos2 = st.selectbox('', [''] + [fos for fos in st.session_state.all_foses if fos != selected_fos1], key=1).lower()
 
-# st.markdown("<h2 style='text-align: center; color: white;'>Choose nodes to go deeper</h2>", unsafe_allow_html=True)
-# last_selected_foses = st.session_state.selected_foses
-# selected_foses = st.multiselect('', st.session_state.all_foses,
-#                                 default=st.session_state.selected_foses)
-# st.session_state.rerun_idx += 1
-# if st.session_state.rerun_idx % 2 == 0:
-#     st.experimental_rerun()
-
-# for fos in selected_foses:
-#     if fos not in st.session_state.selected_foses:
-#         st.session_state.selected_foses.append(fos)
-
-# with open('selected_foses.json', 'w') as f:
-#     json.dump(st.session_state.selected_foses, f)
 
 if selected_fos1 and selected_fos2:
     G = nx.Graph(list(children_fos_df[['children_fos_name', 'parent_fos_name']].to_records(index=False)))
@@ -189,50 +197,27 @@ if selected_fos1 and selected_fos2:
         simple_paths = nx.all_simple_paths(G, source=selected_fos2, target=selected_fos2, cutoff=max_n)
 
     labels_paths = {f'Length: {len(path)}. ' + ' -- '.join(path): path for path in simple_paths}
-    
-    if select_all:
+    labels_paths = {k + ' || Downstream' if check_simple_path(path) else k: path for k, path in labels_paths.items()}
+
+    if select_paths_type in ['all paths', 'only downstream edges']:
         selected_paths = list(labels_paths.keys())
     else:
         selected_paths = st.multiselect('', [''] + list(labels_paths.keys()), key=2)
 
-
-# results = {}
-# for path in simple_paths:
-#     result_entities = get_children(get_entity_by_name(request))
-#     result_df = fos_df.loc[fos_df[fos_df.entity.isin(result_entities)].index].sort_values('rank').iloc[:max_n]
-#     results[request] = result_df
-# foses = [name for df in results.values() for name in df.name]
-
-# for fos in foses:
-#     if fos not in st.session_state.all_foses:
-#         st.session_state.all_foses.append(fos)
     if selected_paths:
         G = nx.DiGraph()
         for path_label in selected_paths:
             simple_path = labels_paths[path_label]
+            if select_paths_type == 'only downstream edges':
+                if not check_simple_path(simple_path):
+                    continue
             for i in range(len(simple_path)-1):
                 fos1, fos2 = simple_path[i], simple_path[i+1]
-                if get_edge_type(fos1, fos2) == 'parent':
+                edge_type = get_edge_type(fos1, fos2)
+                if edge_type == 'parent':
                     G.add_edge(fos1, fos2, label=round(get_connection_power(fos1, fos2), 2))
                 else:
                     G.add_edge(fos2, fos1, label=round(get_connection_power(fos2, fos1), 2))
-#     if len(results[request]) == 0:
-#         G.add_edge(request, request)
-
-# results = {}
-# for request in selected_foses:
-#     result_entities = get_parents(get_entity_by_name(request))
-#     result_df = fos_df.loc[fos_df[fos_df.entity.isin(result_entities)].index].sort_values('rank').iloc[:max_n]
-#     results[request] = result_df
-# foses = [name for df in results.values() for name in df.name]
-
-# for fos in foses:
-#     if fos not in st.session_state.all_foses:
-#         st.session_state.all_foses.append(fos)
-
-# for request in selected_foses:
-#     for name in results[request].name:
-#         G.add_edge(name, request)
 
         nt = Network(
             directed=True,
@@ -255,9 +240,5 @@ if selected_fos1 and selected_fos2:
         nt.save_graph(f'html_files/pyvis_graph.html')
         HtmlFile = open(f'html_files/pyvis_graph.html', 'r', encoding='utf-8')
         components.html(HtmlFile.read(), height=1050)
-
-# cols = st.columns(11)
-# with cols[int(len(cols) / 2)]:
-#     st.button('Go dipper!')
 
 ##############################################################################################################################
